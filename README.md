@@ -31,6 +31,20 @@ create table if not exists public.licenses (
 
 This server uses the **Service Role key**, so you do not need to expose this table to clients.
 
+### Admin shows `db error`
+
+After deploy, open `/admin` again (hard refresh). The API now returns a **`detail`** field with the real Supabase/PostgREST message.
+
+Typical fixes:
+
+| `detail` contains | Fix |
+|-------------------|-----|
+| `relation "public.licenses" does not exist` | Run the SQL above in Supabase **SQL Editor** |
+| `JWT expired` / `Invalid API key` | Regenerate **service_role** key in Project Settings → API; paste into `SUPABASE_SERVICE_ROLE_KEY` with no extra spaces/newlines |
+| `permission denied` | Confirm you used the **service_role** secret, not the **anon** key |
+
+Check server logs: lines like `[GET /api/admin/licenses] Supabase error:` show the same message.
+
 ## Deploy on VPS (Node + PM2)
 
 ```bash

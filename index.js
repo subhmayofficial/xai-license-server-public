@@ -128,6 +128,21 @@ function requireSupabase(res) {
   return supabase;
 }
 
+/** Log and return a JSON body so admin / logs can see the real PostgREST error. */
+function respondSupabaseError(res, route, error, { validateResponse } = {}) {
+  const message = error?.message || String(error);
+  const code = error?.code || "";
+  console.error(`[${route}] Supabase error:`, message, code || "", error?.details || "", error?.hint || "");
+  if (validateResponse) {
+    return res.status(500).json({ valid: false, error: "db error", detail: message });
+  }
+  return res.status(500).json({
+    error: "db error",
+    detail: message,
+    ...(code ? { code } : {}),
+  });
+}
+
 const app = express();
 app.use(
   cors({
@@ -263,7 +278,10 @@ app.get("/admin", (req, res) => {
     async function api(path, opts) {
       const r = await fetch(path, Object.assign({ headers: { "Accept": "application/json" } }, opts || {}));
       const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(j.error || r.statusText);
+      if (!r.ok) {
+        const parts = [j.error, j.detail].filter(Boolean);
+        throw new Error(parts.length ? parts.join(": ") : r.statusText);
+      }
       return j;
     }
 
@@ -397,7 +415,9 @@ app.post("/api/validate", (req, res) => {
       .ilike("key", key)
       .limit(1);
     if (error) {
-      return res.status(500).json({ valid: false, error: "db error" });
+      return respondSupabaseError(res, "POST /api/validate", error, {
+        validateResponse: true,
+      });
     }
     const row = data?.[0];
     return res.json({ valid: Boolean(row && row.revoked !== true) });
@@ -412,7 +432,7 @@ app.get("/api/admin/licenses", requireAdmin, (_, res) => {
       .from("licenses")
       .select("key,label,created_at,revoked")
       .order("created_at", { ascending: true });
-    if (error) return res.status(500).json({ error: "db error" });
+    if (error) return respondSupabaseError(res, "GET /api/admin/licenses", error);
     const licenses = (data || []).map((r) => ({
       key: r.key,
       label: r.label,
@@ -434,7 +454,7 @@ app.post("/api/admin/licenses", requireAdmin, (req, res) => {
       .insert({ key, label, revoked: false })
       .select("key,label,created_at,revoked")
       .single();
-    if (error) return res.status(500).json({ error: "db error" });
+    if (error) return respondSupabaseError(res, "POST /api/admin/licenses", error);
     res.json({
       license: {
         key: data.key,
@@ -457,7 +477,7 @@ app.post("/api/admin/licenses/revoke", requireAdmin, (req, res) => {
       .update({ revoked: true })
       .ilike("key", key)
       .select("key");
-    if (error) return res.status(500).json({ error: "db error" });
+    if (error) return respondSupabaseError(res, "POST /api/admin/licenses/revoke", error);
     res.json({ revoked: (data || []).length });
   })();
 });
