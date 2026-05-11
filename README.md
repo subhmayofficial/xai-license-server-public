@@ -10,8 +10,26 @@ Copy `.env.example` to `.env` on the server:
 |----------|----------|-------------|
 | `PORT` | No | Listen port (default `3847`) |
 | `ADMIN_PASSWORD` | **Yes** for admin | Same value you enter in the admin UI header field |
+| `SUPABASE_URL` | **Yes** | Supabase project URL |
+| `SUPABASE_SERVICE_ROLE_KEY` | **Yes** | Server-only key to access the DB |
 
 If `ADMIN_PASSWORD` is unset, admin routes return **503** (validate still works).
+
+## Supabase schema
+
+Create table `licenses` (SQL editor):
+
+```sql
+create table if not exists public.licenses (
+  id bigserial primary key,
+  key text not null unique,
+  label text not null default 'unnamed',
+  revoked boolean not null default false,
+  created_at timestamptz not null default now()
+);
+```
+
+This server uses the **Service Role key**, so you do not need to expose this table to clients.
 
 ## Deploy on VPS (Node + PM2)
 

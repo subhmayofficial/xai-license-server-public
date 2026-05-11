@@ -1,6 +1,7 @@
 import dotenv from "dotenv";
 import cors from "cors";
 import express from "express";
+import { createClient } from "@supabase/supabase-js";
 import {
   mkdirSync,
   readFileSync,
@@ -19,6 +20,17 @@ const STORE_PATH = join(DATA_DIR, "licenses.json");
 
 const PORT = Number(process.env.PORT || 3847);
 const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || "").trim();
+const SUPABASE_URL = String(process.env.SUPABASE_URL || "").trim();
+const SUPABASE_SERVICE_ROLE_KEY = String(
+  process.env.SUPABASE_SERVICE_ROLE_KEY || "",
+).trim();
+
+const supabase =
+  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
+    : null;
 
 const ADMIN_COOKIE_NAME = "xai_admin";
 const ADMIN_COOKIE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -103,6 +115,17 @@ function normalizeKey(k) {
 
 function generateKey() {
   return `XAI-${randomBytes(8).toString("hex").toUpperCase()}`;
+}
+
+function requireSupabase(res) {
+  if (!supabase) {
+    res.status(503).json({
+      error:
+        "Supabase is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY on the server.",
+    });
+    return null;
+  }
+  return supabase;
 }
 
 const app = express();
@@ -365,52 +388,89 @@ app.post("/api/validate", (req, res) => {
   if (!key) {
     return res.json({ valid: false, reason: "missing" });
   }
-  const { licenses } = readStore();
-  const hit = licenses.find(
-    (L) => !L.revoked && normalizeKey(L.key).toLowerCase() === key.toLowerCase(),
-  );
-  return res.json({ valid: Boolean(hit) });
+  const sb = requireSupabase(res);
+  if (!sb) return;
+  (async () => {
+    const { data, error } = await sb
+      .from("licenses")
+      .select("key, revoked")
+      .ilike("key", key)
+      .limit(1);
+    if (error) {
+      return res.status(500).json({ valid: false, error: "db error" });
+    }
+    const row = data?.[0];
+    return res.json({ valid: Boolean(row && row.revoked !== true) });
+  })();
 });
 
 app.get("/api/admin/licenses", requireAdmin, (_, res) => {
-  const { licenses } = readStore();
-  res.json({ licenses });
+  const sb = requireSupabase(res);
+  if (!sb) return;
+  (async () => {
+    const { data, error } = await sb
+      .from("licenses")
+      .select("key,label,created_at,revoked")
+      .order("created_at", { ascending: true });
+    if (error) return res.status(500).json({ error: "db error" });
+    const licenses = (data || []).map((r) => ({
+      key: r.key,
+      label: r.label,
+      createdAt: r.created_at,
+      revoked: Boolean(r.revoked),
+    }));
+    res.json({ licenses });
+  })();
 });
 
 app.post("/api/admin/licenses", requireAdmin, (req, res) => {
   const label = String(req.body?.label || "").trim() || "unnamed";
   const key = generateKey();
-  const store = readStore();
-  const row = {
-    key,
-    label,
-    createdAt: new Date().toISOString(),
-    revoked: false,
-  };
-  store.licenses.push(row);
-  writeStore(store);
-  res.json({ license: row });
+  const sb = requireSupabase(res);
+  if (!sb) return;
+  (async () => {
+    const { data, error } = await sb
+      .from("licenses")
+      .insert({ key, label, revoked: false })
+      .select("key,label,created_at,revoked")
+      .single();
+    if (error) return res.status(500).json({ error: "db error" });
+    res.json({
+      license: {
+        key: data.key,
+        label: data.label,
+        createdAt: data.created_at,
+        revoked: Boolean(data.revoked),
+      },
+    });
+  })();
 });
 
 app.post("/api/admin/licenses/revoke", requireAdmin, (req, res) => {
   const key = normalizeKey(req.body?.key);
   if (!key) return res.status(400).json({ error: "key required" });
-  const store = readStore();
-  let n = 0;
-  for (const L of store.licenses) {
-    if (normalizeKey(L.key).toLowerCase() === key.toLowerCase()) {
-      L.revoked = true;
-      n++;
-    }
-  }
-  writeStore(store);
-  res.json({ revoked: n });
+  const sb = requireSupabase(res);
+  if (!sb) return;
+  (async () => {
+    const { data, error } = await sb
+      .from("licenses")
+      .update({ revoked: true })
+      .ilike("key", key)
+      .select("key");
+    if (error) return res.status(500).json({ error: "db error" });
+    res.json({ revoked: (data || []).length });
+  })();
 });
 
 ensureStore();
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`xAI license server listening on port ${PORT}`);
   console.log(`  Health:  http://127.0.0.1:${PORT}/health`);
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    console.warn("  WARNING: Supabase not configured — API will return 503");
+  } else {
+    console.log("  Storage: Supabase (licenses table)");
+  }
   if (!ADMIN_PASSWORD) {
     console.warn("  WARNING: ADMIN_PASSWORD is not set — /api/admin/* returns 503");
   } else {
