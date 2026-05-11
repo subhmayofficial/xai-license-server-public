@@ -27,9 +27,23 @@ create table if not exists public.licenses (
   revoked boolean not null default false,
   created_at timestamptz not null default now()
 );
+
+-- Required: PostgREST checks table GRANTs before RLS. Without this you get
+-- "permission denied for table licenses" even with the service_role JWT.
+grant usage on schema public to service_role;
+grant all on table public.licenses to service_role;
+grant usage, select on sequence public.licenses_id_seq to service_role;
+
+-- This table is only touched by your Node server (service_role). Keep RLS off
+-- so you do not need policies for dashboard vs API confusion.
+alter table public.licenses disable row level security;
 ```
 
-This server uses the **Service Role key**, so you do not need to expose this table to clients.
+**Already have the table?** Run only the `grant` / `alter` lines above in the SQL Editor (same order).
+
+If your primary key is **not** `bigserial` (e.g. UUID), skip the `licenses_id_seq` line or adjust the sequence name.
+
+This server uses the **Service Role key** in Node; do **not** grant `anon` access to `licenses` (that would expose keys to the browser).
 
 ### Admin shows `db error`
 
@@ -41,7 +55,7 @@ Typical fixes:
 |-------------------|-----|
 | `relation "public.licenses" does not exist` | Run the SQL above in Supabase **SQL Editor** |
 | `JWT expired` / `Invalid API key` | Regenerate **service_role** key in Project Settings → API; paste into `SUPABASE_SERVICE_ROLE_KEY` with no extra spaces/newlines |
-| `permission denied` | Confirm you used the **service_role** secret, not the **anon** key |
+| `permission denied for table licenses` | Run the **`grant … to service_role`** (and sequence + `disable row level security`) lines from the SQL block above — see [Postgres roles / grants](https://supabase.com/docs/guides/database/postgres/roles) |
 
 Check server logs: lines like `[GET /api/admin/licenses] Supabase error:` show the same message.
 

@@ -133,13 +133,23 @@ function respondSupabaseError(res, route, error, { validateResponse } = {}) {
   const message = error?.message || String(error);
   const code = error?.code || "";
   console.error(`[${route}] Supabase error:`, message, code || "", error?.details || "", error?.hint || "");
+  const permHint =
+    /permission denied/i.test(message) && /licenses/i.test(message)
+      ? "Run in Supabase SQL Editor: GRANT USAGE ON SCHEMA public TO service_role; GRANT ALL ON TABLE public.licenses TO service_role; GRANT USAGE, SELECT ON SEQUENCE public.licenses_id_seq TO service_role; ALTER TABLE public.licenses DISABLE ROW LEVEL SECURITY; (see license-server README)"
+      : undefined;
   if (validateResponse) {
-    return res.status(500).json({ valid: false, error: "db error", detail: message });
+    return res.status(500).json({
+      valid: false,
+      error: "db error",
+      detail: message,
+      ...(permHint ? { hint: permHint } : {}),
+    });
   }
   return res.status(500).json({
     error: "db error",
     detail: message,
     ...(code ? { code } : {}),
+    ...(permHint ? { hint: permHint } : {}),
   });
 }
 
@@ -279,8 +289,8 @@ app.get("/admin", (req, res) => {
       const r = await fetch(path, Object.assign({ headers: { "Accept": "application/json" } }, opts || {}));
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
-        const parts = [j.error, j.detail].filter(Boolean);
-        throw new Error(parts.length ? parts.join(": ") : r.statusText);
+        const parts = [j.error, j.detail, j.hint].filter(Boolean);
+        throw new Error(parts.length ? parts.join(" — ") : r.statusText);
       }
       return j;
     }
